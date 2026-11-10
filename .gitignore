@@ -1,0 +1,6 @@
+/server
+/client
+/technician
+*.o
+/core
+/core.*
