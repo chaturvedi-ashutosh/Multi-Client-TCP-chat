@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <netdb.h>
 #include <string>
 #include <sys/socket.h>
@@ -13,6 +14,13 @@
 #include <unistd.h>
 
 namespace {
+
+std::mutex output_mutex;
+
+void print_event(const std::string& event) {
+    std::lock_guard<std::mutex> lock(output_mutex);
+    std::cout << event << '\n';
+}
 
 bool parse_port(const char* text, std::string& port) {
     char* end = nullptr;
@@ -32,27 +40,32 @@ void receive_messages(int fd, std::atomic<bool>& assigned) {
         if (fields.size() == 2 && fields[0] == "WAITING") {
             assigned.store(false);
             if (fields[1] == "SESSION_ENDED") {
-                std::cout << "Session ended; returned to the waiting queue.\n";
+                print_event("[STATUS] Session ended. You are back in the waiting queue.");
             } else if (fields[1] == "TECHNICIAN_DISCONNECTED") {
-                std::cout << "Technician disconnected; returned to the front of the queue.\n";
+                print_event("[STATUS] Technician disconnected. You are back at the front of the queue.");
             } else if (fields[1] == "ASSIGNMENT_FAILED") {
-                std::cout << "Assignment failed; you are waiting for another technician request.\n";
+                print_event("[STATUS] Assignment failed. You are waiting for another technician request.");
             } else {
-                std::cout << "Waiting in queue. Customer ID: " << fields[1] << '\n';
+                print_event("[STATUS] Waiting for a technician. Customer ID: " + fields[1]);
             }
         } else if (fields.size() == 3 && fields[0] == "ASSIGN") {
             assigned.store(true);
-            std::cout << "Status: assigned to a technician. Customer ID: " << fields[1] << '\n';
+            print_event("[STATUS] Chatting with technician " + fields[2] +
+                        ". Customer ID: " + fields[1]);
         } else if (fields.size() >= 2 && fields[0] == "MESSAGE") {
-            std::cout << "Technician: " << line.substr(8) << '\n';
+            print_event("[TECHNICIAN] " + line.substr(8));
+        } else if (fields.size() >= 2 && fields[0] == "BROADCAST") {
+            print_event("[PUBLIC NOTICE] " + line.substr(10));
         } else if (fields.size() >= 2 && fields[0] == "ERROR") {
-            std::cout << "Error: " << line.substr(6) << '\n';
+            print_event("[ERROR] " + line.substr(6));
         } else {
-            std::cout << "Server: " << line << '\n';
+            print_event("[SERVER] " + line);
         }
     }
     if (error != "peer disconnected") {
-        std::cerr << "connection closed: " << error << '\n';
+        print_event("[CONNECTION] Closed: " + error);
+    } else {
+        print_event("[CONNECTION] Server disconnected.");
     }
 }
 
@@ -107,11 +120,28 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "Connected as " << name << ". Type /quit to disconnect.\n";
+    {
+        std::lock_guard<std::mutex> lock(output_mutex);
+        std::cout << "========================================\n"
+                  << "       CUSTOMER SUPPORT CHAT\n"
+                  << "========================================\n"
+                  << "Name: " << name << "\n"
+                  << "Server: " << argv[1] << ':' << port << "\n"
+                  << "Status: Connecting...\n"
+                  << "----------------------------------------\n"
+                  << "Messages and status updates appear below.\n"
+                  << "Commands: /status  /quit\n"
+                  << "========================================\n";
+    }
     std::atomic<bool> assigned{false};
     std::thread receiver(receive_messages, fd, std::ref(assigned));
     std::string input;
-    while (std::getline(std::cin, input)) {
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(output_mutex);
+            std::cout << "\n> " << std::flush;
+        }
+        if (!std::getline(std::cin, input)) break;
         if (input == "/quit") {
             if (!chat::send_all(fd, "DISCONNECT\n")) {
                 std::cerr << "disconnect send failed: " << std::strerror(errno) << '\n';
@@ -119,8 +149,8 @@ int main(int argc, char* argv[]) {
             break;
         }
         if (input == "/status") {
-            std::cout << (assigned.load() ? "Status: active session.\n"
-                                          : "Status: waiting for a technician.\n");
+            print_event(assigned.load() ? "[STATUS] Chatting with a technician."
+                                        : "[STATUS] Waiting for a technician.");
             continue;
         }
         if (assigned.load()) {
@@ -129,7 +159,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
         } else {
-            std::cout << "You are waiting for a technician assignment.\n";
+            print_event("[STATUS] Your message was not sent; wait for a technician to join.");
         }
     }
     if (shutdown(fd, SHUT_RDWR) < 0 && errno != ENOTCONN) {

@@ -1,6 +1,7 @@
 /server
 /client
 /technician
+/chat_gui
 *.o
 /core
 /core.*

@@ -6,15 +6,16 @@ Multi-client support chat over TCP. Customers connect to a central server and wa
 Interview project: code must stay simple enough for the owner to explain and defend. Prefer correct and simple over clever.
 
 ## Stack (fixed)
-- C++17, g++, Make, Ubuntu (WSL2). Linux/POSIX sockets only, no Winsock.
-- `std::thread`, `std::mutex`, `std::lock_guard`, `std::queue`.
-- No third-party libraries. No epoll/async. No DB, auth, encryption, file transfer, or design-pattern abstractions.
+- C++17, g++, Make, Ubuntu (WSL2). The server uses Linux/POSIX sockets only, no Winsock.
+- Server concurrency uses `std::thread`, `std::mutex`, `std::lock_guard`, and `std::queue`.
+- The server and console clients have no third-party dependencies. The optional graphical client uses Qt 6 Widgets and Network (`QTcpSocket`). No server-side epoll/async framework, DB, auth, encryption, file transfer, or design-pattern abstractions.
 
 ## Structure
 ```
 src/server.cpp      server (thread per client)
 src/client.cpp      customer client
 src/technician.cpp  technician client
+src/gui.cpp         Qt graphical customer and technician client
 src/chat.hpp        shared protocol helpers (send_all, line reader, parsing)
 Makefile  README.md  .gitignore
 ```
@@ -30,8 +31,9 @@ Start with `server.cpp` and `client.cpp`. Add files only when needed.
 Newline-delimited text, `|`-separated fields, max line length enforced. Commands:
 ```
 LOGIN|CUSTOMER|<name>     LOGIN|TECHNICIAN|<name>
-REQUEST_NEXT              ASSIGN|<id>|<name>
-MESSAGE|<text>            END_SESSION
+REQUEST_NEXT              ASSIGN|<id>|<name for the other participant>
+MESSAGE|<text>            BROADCAST|<text> (technician only)
+END_SESSION
 ```
 Final format is fixed in the protocol phase. Record it in `chat.hpp` and the README, and do not change it silently.
 
@@ -48,7 +50,7 @@ Final format is fixed in the protocol phase. Record it in `chat.hpp` and the REA
 10. Check every socket call. No silently ignored errors. Reject malformed messages.
 
 ## Working rules
-- Build in phases, one at a time: basic server, basic client, two-way chat (receiver thread), multi-client, waiting queue, private routing, graceful disconnection, error handling, CLI polish, review, README. GUI, Docker, and deployment are optional and come only after the core passes all tests.
+- Build in phases, one at a time. Core phases are complete; optional Qt GUI phases add the connection screen, customer workspace, technician workspace, integration review, and documentation. Docker and deployment remain out of scope.
 - Generate real code, then give the exact commands to build and run it, and ask for output or errors. Do not assume success.
 - Edit existing code instead of rewriting it. Keep file names, function names, and decisions stable.
 - When debugging, read the code and find the actual cause before proposing a fix.
@@ -62,6 +64,8 @@ make
 ./server <port>
 ./client <host> <port>
 ./technician <host> <port>
+make gui
+./chat_gui
 ```
 
 ## Acceptance tests (done = all pass)
@@ -82,4 +86,19 @@ Completed: Phases 1–9 were implemented and the user reported they work correct
 Key decisions: One mutex protects queue, customer, technician, and active-session state. Temporary duplicate descriptors are owned by the sending function and closed after each send. Detached handlers own accepted sockets; detach failure is joined so the handler remains the sole fd owner. Generated executables are ignored and kept out of source control.
 Open issues: Detached threads mean server shutdown uses process termination rather than a coordinated join. The final build succeeded; the last server-source review change was compiled, while client and technician targets were already up to date.
 Tests passed: The user confirmed phases 1–9, including queue order, private routing, disconnect cleanup, errors, and CLI status. `make` completed successfully in Ubuntu with no reported errors.
+```
+
+## Follow-up UI and broadcast rollout
+```text
+Current rollout phase: 4 of 4 - Complete
+Completed: The broadcast protocol and server routing are implemented. The Qt GUI includes customer and technician workspaces; technicians can request/end sessions, send private messages, and broadcast to connected customers. The connection window closes after a workspace opens, while the application owns the TCP socket for the session. ASSIGN preserves its three-field format and includes the other participant's name for each role. README build, run, protocol, and manual-check instructions cover the GUI and broadcast behavior.
+Open issues: The Qt target has not been built or run in this environment.
+```
+
+
+## Qt GUI rollout
+```text
+Current GUI phase: 4 of 4 - Complete
+Completed: Added the optional Qt 6 Widgets/Network gui target, a connection window, customer and technician workspaces, private chat, public broadcasts, session controls, and disconnect handling. Role selection explicitly closes its popup; the connection window closes after login and workspace launch. Both chat views show the relevant participant names. README instructions and manual checks document GUI workflows. Existing server and console targets remain available.
+Open issues: The Qt target has not been built or run in this environment.
 ```

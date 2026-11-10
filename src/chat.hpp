@@ -11,10 +11,12 @@ namespace chat {
 
 // Wire protocol (UTF-8 text, one command per newline, maximum 1024 bytes):
 // Client -> server: LOGIN|CUSTOMER|name, LOGIN|TECHNICIAN|name,
-//                   REQUEST_NEXT, MESSAGE|text, END_SESSION, DISCONNECT
-// Server -> client: WAITING|customer_id or status, ASSIGN|customer_id|name,
-//                   TECHNICIAN_READY, QUEUE_EMPTY, BUSY, MESSAGE|text,
-//                   SESSION_ENDED[|reason], ERROR|reason
+//                   REQUEST_NEXT, MESSAGE|text, BROADCAST|text, END_SESSION, DISCONNECT
+// Server -> customer: WAITING|customer_id or status, ASSIGN|customer_id|technician_name,
+//                     MESSAGE|text, BROADCAST|text, ERROR|reason
+// Server -> technician: TECHNICIAN_READY, ASSIGN|customer_id|customer_name,
+//                       QUEUE_EMPTY, BUSY, MESSAGE|text, BROADCAST_SENT|customer_count,
+//                       SESSION_ENDED[|reason], ERROR|reason
 // DISCONNECT is valid for either role. Names are 1-64 bytes and cannot contain '|', CR, or LF. Message text can
 // contain '|' but cannot contain LF. A trailing CR before LF is ignored.
 constexpr std::size_t kMaxLineLength = 1024;

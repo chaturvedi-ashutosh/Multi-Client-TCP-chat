@@ -14,6 +14,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -27,6 +28,7 @@ struct ServerState {
     std::unordered_map<int, Customer> customers;
     std::queue<int> waiting;
     int technician_fd = -1;
+    std::string technician_name;
     int active_customer_fd = -1;
     int next_customer_id = 1;
 };
@@ -177,11 +179,49 @@ void handle_technician(int fd, chat::LineReader& reader) {
             }
             continue;
         }
+        if (line.rfind("BROADCAST|", 0) == 0) {
+            if (line.size() == 10) {
+                if (!send_line(fd, "ERROR|broadcast text cannot be empty")) return;
+                continue;
+            }
+
+            std::vector<int> customer_send_fds;
+            bool technician_registered = false;
+            std::size_t duplicate_failures = 0;
+            {
+                std::lock_guard<std::mutex> lock(state.mutex);
+                technician_registered = state.technician_fd == fd;
+                if (technician_registered) {
+                    customer_send_fds.reserve(state.customers.size());
+                    for (const auto& entry : state.customers) {
+                        const int duplicate_fd = duplicate_for_send(entry.first);
+                        if (duplicate_fd >= 0) customer_send_fds.push_back(duplicate_fd);
+                        else ++duplicate_failures;
+                    }
+                }
+            }
+            if (!technician_registered) {
+                if (!send_line(fd, "ERROR|technician is not registered")) return;
+                continue;
+            }
+
+            std::size_t delivered = 0;
+            for (const int customer_send_fd : customer_send_fds) {
+                if (send_line_and_close(customer_send_fd, line)) ++delivered;
+            }
+            if (delivered != customer_send_fds.size() || duplicate_failures != 0) {
+                if (!send_line(fd, "ERROR|broadcast delivery failed for one or more customers")) return;
+            } else if (!send_line(fd, "BROADCAST_SENT|" + std::to_string(delivered))) {
+                return;
+            }
+            continue;
+        }
         if (fields.size() == 1 && fields[0] == "REQUEST_NEXT") {
             int customer_fd = -1;
             int customer_send_fd = -1;
             int customer_id = 0;
             std::string customer_name;
+            std::string technician_name;
             bool busy = false;
             bool duplicate_failed = false;
             {
@@ -197,6 +237,7 @@ void handle_technician(int fd, chat::LineReader& reader) {
                             customer_fd = candidate;
                             customer_id = found->second.id;
                             customer_name = found->second.name;
+                            technician_name = state.technician_name;
                             state.active_customer_fd = candidate;
                             customer_send_fd = duplicate_for_send(candidate);
                             if (customer_send_fd < 0) {
@@ -217,9 +258,12 @@ void handle_technician(int fd, chat::LineReader& reader) {
             } else if (customer_fd < 0) {
                 if (!send_line(fd, "QUEUE_EMPTY")) return;
             } else {
-                const std::string assignment = "ASSIGN|" + std::to_string(customer_id) + "|" + customer_name;
-                const bool customer_notified = send_line_and_close(customer_send_fd, assignment);
-                const bool technician_notified = send_line(fd, assignment);
+                const std::string customer_assignment =
+                    "ASSIGN|" + std::to_string(customer_id) + "|" + technician_name;
+                const std::string technician_assignment =
+                    "ASSIGN|" + std::to_string(customer_id) + "|" + customer_name;
+                const bool customer_notified = send_line_and_close(customer_send_fd, customer_assignment);
+                const bool technician_notified = send_line(fd, technician_assignment);
                 if (!customer_notified || !technician_notified) {
                     bool returned_to_queue = false;
                     int customer_status_fd = -1;
@@ -308,6 +352,7 @@ void handle_client(int fd) {
             std::lock_guard<std::mutex> lock(state.mutex);
             if (state.technician_fd < 0) {
                 state.technician_fd = fd;
+                state.technician_name = fields[2];
                 accepted = true;
             }
         }
@@ -324,7 +369,10 @@ void handle_client(int fd) {
         int customer_status_fd = -1;
         {
             std::lock_guard<std::mutex> lock(state.mutex);
-            if (state.technician_fd == fd) state.technician_fd = -1;
+            if (state.technician_fd == fd) {
+                state.technician_fd = -1;
+                state.technician_name.clear();
+            }
             customer_to_requeue = state.active_customer_fd;
             if (customer_to_requeue >= 0) {
                 state.active_customer_fd = -1;
